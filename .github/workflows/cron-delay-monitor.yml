@@ -1,0 +1,111 @@
+name: Cron Delay Tracker & Dashboard Deployment
+
+on:
+  schedule:
+    # Runs every morning at 03:14 UTC
+    - cron: '14 3 * * *'
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 'Optional run notes / description'
+        required: false
+        default: 'Manual test run'
+      delay_seconds:
+        description: 'Simulated delay in seconds (leave blank for real elapsed time)'
+        required: false
+        default: ''
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'data/**'
+      - 'frontend/src/data/**'
+      - 'frontend/public/data/**'
+      - 'README.md'
+      - 'CHANGELOG.md'
+      - 'AGENTS.md'
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  track-and-deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package.json'
+
+      - name: Run unit tests
+        run: |
+          PYTHONPATH=scripts python3 scripts/test_tracker.py
+
+      - name: Record cron delay in SQLite & export JSON
+        id: record_delay
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "${{ github.event.inputs.delay_seconds }}" ]; then
+            EXTRA_ARGS="--delay-seconds ${{ github.event.inputs.delay_seconds }}"
+          fi
+
+          python3 scripts/record_delay.py \
+            --trigger-type "${{ github.event_name }}" \
+            --run-id "${{ github.run_id }}" \
+            --run-number "${{ github.run_number }}" \
+            $EXTRA_ARGS
+
+      - name: Commit and push updated database & JSON
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/delays.db data/delays.json frontend/src/data/delays.json frontend/public/data/delays.json
+          if ! git diff --staged --quiet; then
+            git commit -m "chore(data): record cron run for $(date -u +'%Y-%m-%d') [skip ci]"
+            git push
+          else
+            echo "No database changes to commit."
+          fi
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: |
+          npm ci || npm install
+
+      - name: Build Vite application
+        working-directory: frontend
+        run: |
+          npm run build
+
+      - name: Setup GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'frontend/dist'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -216,3 +216,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Frontend Node dependencies & build artifacts
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.vite/
+frontend/.vite/
+*.local
+.DS_Store
